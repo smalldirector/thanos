@@ -79,6 +79,7 @@ func main() {
 	registerBucket(cmds, app, "bucket")
 	registerDownsample(cmds, app, "downsample")
 	registerReceive(cmds, app, "receive")
+	registerDedup(cmds, app, "dedup")
 
 	cmd, err := app.Parse(os.Args[1:])
 	if err != nil {
