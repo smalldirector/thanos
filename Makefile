@@ -2,53 +2,59 @@ PREFIX            ?= $(shell pwd)
 DIRECTORIES       ?= $(shell find . -path './*' -prune -type d -not -path "./vendor")
 DOCKER_IMAGE_NAME ?= thanos
 DOCKER_IMAGE_TAG  ?= $(subst /,-,$(shell git rev-parse --abbrev-ref HEAD))-$(shell date +%Y-%m-%d)-$(shell git rev-parse --short HEAD)
-# $GOPATH/bin might not be in $PATH, so we can't assume `which` would give use
-# the path of promu et al. As for selecting the first GOPATH, we assume:
-# - most people only have one GOPATH at a time;
-# - if you don't have one or any of those tools installed, running `go get`
-#   would place them in the first GOPATH.
-# It's possible that any of the tools would be installed in the other GOPATHs,
-# but for simplicity sake we just make sure they exist in the first one, and
-# then keep using those.
-FIRST_GOPATH      ?= $(firstword $(subst :, ,$(shell go env GOPATH)))
+
 TMP_GOPATH        ?= /tmp/thanos-go
-BIN_DIR           ?= $(FIRST_GOPATH)/bin
+GOBIN             ?= ${GOPATH}/bin
 GO111MODULE       ?= on
 export GO111MODULE
 
 # Tools.
-EMBEDMD           ?= $(BIN_DIR)/embedmd-$(EMBEDMD_VERSION)
+EMBEDMD           ?= $(GOBIN)/embedmd-$(EMBEDMD_VERSION)
 # v2.0.0
 EMBEDMD_VERSION   ?= 97c13d6e41602fc6e397eb51c45f38069371a969
-ERRCHECK          ?= $(BIN_DIR)/errcheck-$(ERRCHECK_VERSION)
+ERRCHECK          ?= $(GOBIN)/errcheck-$(ERRCHECK_VERSION)
 # v1.2.0
 ERRCHECK_VERSION  ?= e14f8d59a22d460d56c5ee92507cd94c78fbf274
-LICHE             ?= $(BIN_DIR)/liche-$(LICHE_VERSION)
+LICHE             ?= $(GOBIN)/liche-$(LICHE_VERSION)
 LICHE_VERSION     ?= 2a2e6e56f6c615c17b2e116669c4cdb31b5453f3
-GOIMPORTS         ?= $(BIN_DIR)/goimports-$(GOIMPORTS_VERSION)
+GOIMPORTS         ?= $(GOBIN)/goimports-$(GOIMPORTS_VERSION)
 GOIMPORTS_VERSION ?= 1c3d964395ce8f04f3b03b30aaed0b096c08c3c6
-PROMU             ?= $(BIN_DIR)/promu-$(PROMU_VERSION)
+PROMU             ?= $(GOBIN)/promu-$(PROMU_VERSION)
 # v0.2.0
 PROMU_VERSION     ?= 264dc36af9ea3103255063497636bd5713e3e9c1
-PROTOC            ?= $(BIN_DIR)/protoc-$(PROTOC_VERSION)
+PROTOC            ?= $(GOBIN)/protoc-$(PROTOC_VERSION)
 PROTOC_VERSION    ?= 3.4.0
+# v0.55.3 This needs to match with version in netlify.toml
+HUGO_VERSION      ?= 993b84333cd75faa224d02618f312a0e96b53372
+HUGO              ?= $(GOBIN)/hugo-$(HUGO_VERSION)
+# v3.1.1
+GOBINDATA_VERSION ?= a9c83481b38ebb1c4eb8f0168fd4b10ca1d3c523
+GOBINDATA         ?= $(GOBIN)/go-bindata-$(GOBINDATA_VERSION)
 GIT               ?= $(shell which git)
 BZR               ?= $(shell which bzr)
+
+WEB_DIR           ?= website
+WEBSITE_BASE_URL  ?= https://thanos.io
+PUBLIC_DIR        ?= $(WEB_DIR)/public
+ME                ?= $(shell whoami)
 
 # E2e test deps.
 # Referenced by github.com/improbable-eng/thanos/blob/master/docs/getting_started.md#prometheus
 
-# Limitied prom version, because testing was not possibe. This should fix it: https://github.com/improbable-eng/thanos/issues/758
-PROM_VERSIONS           ?=v2.4.3 v2.5.0
+# Limited prom version, because testing was not possible. This should fix it: https://github.com/improbable-eng/thanos/issues/758
+PROM_VERSIONS           ?=v2.4.3 v2.5.0 v2.8.1
+
 ALERTMANAGER_VERSION    ?=v0.15.2
 MINIO_SERVER_VERSION    ?=RELEASE.2018-10-06T00-15-16Z
 
-# fetch_go_bin_version downloads (go gets) the binary from specific version and installs it in $(BIN_DIR)/<bin>-<version>
+# fetch_go_bin_version downloads (go gets) the binary from specific version and installs it in $(GOBIN)/<bin>-<version>
 # arguments:
 # $(1): Install path. (e.g github.com/campoy/embedmd)
 # $(2): Tag or revision for checkout.
+# TODO(bwplotka): Move to just using modules, however make sure to not use or edit Thanos go.mod file!
 define fetch_go_bin_version
-	@mkdir -p $(BIN_DIR)
+	@mkdir -p $(GOBIN)
+	@mkdir -p $(TMP_GOPATH)
 
 	@echo ">> fetching $(1)@$(2) revision/version"
 	@if [ ! -d '$(TMP_GOPATH)/src/$(1)' ]; then \
@@ -59,8 +65,27 @@ define fetch_go_bin_version
 	@CDPATH='' cd -- '$(TMP_GOPATH)/src/$(1)' && git checkout -f -q '$(2)'
 	@echo ">> installing $(1)@$(2)"
 	@GOBIN='$(TMP_GOPATH)/bin' GOPATH='$(TMP_GOPATH)' GO111MODULE='off' go install '$(1)'
-	@mv -- '$(TMP_GOPATH)/bin/$(shell basename $(1))' '$(BIN_DIR)/$(shell basename $(1))-$(2)'
-	@echo ">> produced $(BIN_DIR)/$(shell basename $(1))-$(2)"
+	@mv -- '$(TMP_GOPATH)/bin/$(shell basename $(1))' '$(GOBIN)/$(shell basename $(1))-$(2)'
+	@echo ">> produced $(GOBIN)/$(shell basename $(1))-$(2)"
+
+endef
+
+define require_clean_work_tree
+	@git update-index -q --ignore-submodules --refresh
+
+    @if ! git diff-files --quiet --ignore-submodules --; then \
+        echo >&2 "cannot $1: you have unstaged changes."; \
+        git diff-files --name-status -r --ignore-submodules -- >&2; \
+        echo >&2 "Please commit or stash them."; \
+        exit 1; \
+    fi
+
+    @if ! git diff-index --cached --quiet HEAD --ignore-submodules --; then \
+        echo >&2 "cannot $1: your index contains uncommitted changes."; \
+        git diff-index --cached --name-status -r --ignore-submodules HEAD -- >&2; \
+        echo >&2 "Please commit or stash them."; \
+        exit 1; \
+    fi
 
 endef
 
@@ -69,24 +94,23 @@ all: format build
 
 # assets repacks all statis assets into go file for easier deploy.
 .PHONY: assets
-assets:
+assets: $(GOBINDATA)
 	@echo ">> deleting asset file"
 	@rm pkg/ui/bindata.go || true
 	@echo ">> writing assets"
-	@go get -u github.com/jteeuwen/go-bindata/...
-	@go-bindata $(bindata_flags) -pkg ui -o pkg/ui/bindata.go -ignore '(.*\.map|bootstrap\.js|bootstrap-theme\.css|bootstrap\.css)'  pkg/ui/templates/... pkg/ui/static/...
+	@$(GOBINDATA) $(bindata_flags) -pkg ui -o pkg/ui/bindata.go -ignore '(.*\.map|bootstrap\.js|bootstrap-theme\.css|bootstrap\.css)'  pkg/ui/templates/... pkg/ui/static/...
 	@go fmt ./pkg/ui
 
 
 # build builds Thanos binary using `promu`.
 .PHONY: build
 build: check-git check-bzr go-mod-tidy $(PROMU)
-	@echo ">> building binaries"
+	@echo ">> building binaries $(GOBIN)"
 	@$(PROMU) build --prefix $(PREFIX)
 
 # crossbuild builds all binaries for all platforms.
 .PHONY: crossbuild
-crossbuild: check-git check-bzr go-mod-tidy $(PROMU)
+crossbuild: $(PROMU)
 	@echo ">> crossbuilding all binaries"
 	$(PROMU) crossbuild -v
 
@@ -119,6 +143,7 @@ docs: $(EMBEDMD) build
 check-docs: $(EMBEDMD) $(LICHE) build
 	@EMBEDMD_BIN="$(EMBEDMD)" scripts/genflagdocs.sh check
 	@$(LICHE) --recursive docs --exclude "cloud.tencent.com" --document-root .
+	@$(LICHE) --exclude "cloud.tencent.com" --document-root . *.md
 
 # errcheck performs static analysis and returns error if any of the errors is not checked.
 .PHONY: errcheck
@@ -147,7 +172,7 @@ promu: $(PROMU)
 .PHONY: tarball
 tarball: $(PROMU)
 	@echo ">> building release tarball"
-	$(PROMU) tarball --prefix $(PREFIX) $(BIN_DIR)
+	$(PROMU) tarball --prefix $(PREFIX) $(GOBIN)
 
 .PHONY: tarballs-release
 tarballs-release: $(PROMU)
@@ -203,6 +228,22 @@ else
 	@echo >&2 "No bzr binary found."; exit 1
 endif
 
+.PHONY: web-pre-process
+web-pre-process:
+	@echo ">> running documentation website pre processing"
+	@bash scripts/websitepreprocess.sh
+
+.PHONY: web
+web: web-pre-process $(HUGO)
+	@echo ">> building documentation website"
+	# TODO(bwplotka): Make it --gc
+	@cd $(WEB_DIR) && HUGO_ENV=production $(HUGO) --config hugo.yaml --minify -v -b $(WEBSITE_BASE_URL)
+
+.PHONY: web-serve
+web-serve: web-pre-process $(HUGO)
+	@echo ">> serving documentation website"
+	@cd $(WEB_DIR) && $(HUGO) --config hugo.yaml -v server
+
 # non-phony targets
 $(EMBEDMD):
 	$(call fetch_go_bin_version,github.com/campoy/embedmd,$(EMBEDMD_VERSION))
@@ -219,10 +260,18 @@ $(LICHE):
 $(PROMU):
 	$(call fetch_go_bin_version,github.com/prometheus/promu,$(PROMU_VERSION))
 
+$(HUGO):
+	@go get github.com/gohugoio/hugo@$(HUGO_VERSION)
+	@mv $(GOBIN)/hugo $(HUGO)
+	@go mod tidy
+
+$(GOBINDATA):
+	$(call fetch_go_bin_version,github.com/go-bindata/go-bindata/go-bindata,$(GOBINDATA_VERSION))
+
 $(PROTOC):
 	@mkdir -p $(TMP_GOPATH)
 	@echo ">> fetching protoc@${PROTOC_VERSION}"
 	@PROTOC_VERSION="$(PROTOC_VERSION)" TMP_GOPATH="$(TMP_GOPATH)" scripts/installprotoc.sh
 	@echo ">> installing protoc@${PROTOC_VERSION}"
-	@mv -- "$(TMP_GOPATH)/bin/protoc" "$(BIN_DIR)/protoc-$(PROTOC_VERSION)"
-	@echo ">> produced $(BIN_DIR)/protoc-$(PROTOC_VERSION)"
+	@mv -- "$(TMP_GOPATH)/bin/protoc" "$(GOBIN)/protoc-$(PROTOC_VERSION)"
+	@echo ">> produced $(GOBIN)/protoc-$(PROTOC_VERSION)"

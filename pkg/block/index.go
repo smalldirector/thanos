@@ -26,8 +26,10 @@ import (
 	"github.com/prometheus/tsdb/labels"
 )
 
-// IndexCacheFilename is the canonical name for index cache files.
-const IndexCacheFilename = "index.cache.json"
+const (
+	// IndexCacheVersion is a enumeration of index cache versions supported by Thanos.
+	IndexCacheVersion1 = iota + 1
+)
 
 type postingsRange struct {
 	Name, Value string
@@ -35,10 +37,11 @@ type postingsRange struct {
 }
 
 type indexCache struct {
-	Version     int
-	Symbols     map[uint32]string
-	LabelValues map[string][]string
-	Postings    []postingsRange
+	Version      int
+	CacheVersion int
+	Symbols      map[uint32]string
+	LabelValues  map[string][]string
+	Postings     []postingsRange
 }
 
 type realByteSlice []byte
@@ -112,9 +115,10 @@ func WriteIndexCache(logger log.Logger, indexFn string, fn string) error {
 	defer runutil.CloseWithLogOnErr(logger, f, "index cache writer")
 
 	v := indexCache{
-		Version:     indexr.Version(),
-		Symbols:     symbols,
-		LabelValues: map[string][]string{},
+		Version:      indexr.Version(),
+		CacheVersion: IndexCacheVersion1,
+		Symbols:      symbols,
+		LabelValues:  map[string][]string{},
 	}
 
 	// Extract label value indices.
@@ -336,7 +340,7 @@ func GatherIndexIssueStats(logger log.Logger, fn string, minTime int64, maxTime 
 	if err != nil {
 		return stats, errors.Wrap(err, "open index file")
 	}
-	defer runutil.CloseWithErrCapture(logger, &err, r, "gather index issue file reader")
+	defer runutil.CloseWithErrCapture(&err, r, "gather index issue file reader")
 
 	p, err := r.Postings(index.AllPostingsKey())
 	if err != nil {
@@ -456,19 +460,19 @@ func Repair(logger log.Logger, dir string, id ulid.ULID, source metadata.SourceT
 	if err != nil {
 		return resid, errors.Wrap(err, "open block")
 	}
-	defer runutil.CloseWithErrCapture(logger, &err, b, "repair block reader")
+	defer runutil.CloseWithErrCapture(&err, b, "repair block reader")
 
 	indexr, err := b.Index()
 	if err != nil {
 		return resid, errors.Wrap(err, "open index")
 	}
-	defer runutil.CloseWithErrCapture(logger, &err, indexr, "repair index reader")
+	defer runutil.CloseWithErrCapture(&err, indexr, "repair index reader")
 
 	chunkr, err := b.Chunks()
 	if err != nil {
 		return resid, errors.Wrap(err, "open chunks")
 	}
-	defer runutil.CloseWithErrCapture(logger, &err, chunkr, "repair chunk reader")
+	defer runutil.CloseWithErrCapture(&err, chunkr, "repair chunk reader")
 
 	resdir := filepath.Join(dir, resid.String())
 
@@ -476,13 +480,13 @@ func Repair(logger log.Logger, dir string, id ulid.ULID, source metadata.SourceT
 	if err != nil {
 		return resid, errors.Wrap(err, "open chunk writer")
 	}
-	defer runutil.CloseWithErrCapture(logger, &err, chunkw, "repair chunk writer")
+	defer runutil.CloseWithErrCapture(&err, chunkw, "repair chunk writer")
 
 	indexw, err := index.NewWriter(filepath.Join(resdir, IndexFilename))
 	if err != nil {
 		return resid, errors.Wrap(err, "open index writer")
 	}
-	defer runutil.CloseWithErrCapture(logger, &err, indexw, "repair index writer")
+	defer runutil.CloseWithErrCapture(&err, indexw, "repair index writer")
 
 	// TODO(fabxc): adapt so we properly handle the version once we update to an upstream
 	// that has multiple.
@@ -531,7 +535,7 @@ func IgnoreDuplicateOutsideChunk(_ int64, _ int64, last *chunks.Meta, curr *chun
 	// the current one.
 	if curr.MinTime != last.MinTime || curr.MaxTime != last.MaxTime {
 		return false, errors.Errorf("non-sequential chunks not equal: [%d, %d] and [%d, %d]",
-			last.MaxTime, last.MaxTime, curr.MinTime, curr.MaxTime)
+			last.MinTime, last.MaxTime, curr.MinTime, curr.MaxTime)
 	}
 	ca := crc32.Checksum(last.Chunk.Bytes(), castagnoli)
 	cb := crc32.Checksum(curr.Chunk.Bytes(), castagnoli)
@@ -559,9 +563,14 @@ func sanitizeChunkSequence(chks []chunks.Meta, mint int64, maxt int64, ignoreChk
 	var last *chunks.Meta
 
 OUTER:
-	for _, c := range chks {
+	// This compares the current chunk to the chunk from the last iteration
+	// by pointers.  If we use "i, c := range chks" the variable c is a new
+	// variable who's address doesn't change through the entire loop.
+	// The current element of the chks slice is copied into it. We must take
+	// the address of the indexed slice instead.
+	for i := range chks {
 		for _, ignoreChkFn := range ignoreChkFns {
-			ignore, err := ignoreChkFn(mint, maxt, last, &c)
+			ignore, err := ignoreChkFn(mint, maxt, last, &chks[i])
 			if err != nil {
 				return nil, errors.Wrap(err, "ignore function")
 			}
@@ -571,11 +580,16 @@ OUTER:
 			}
 		}
 
-		last = &c
-		repl = append(repl, c)
+		last = &chks[i]
+		repl = append(repl, chks[i])
 	}
 
 	return repl, nil
+}
+
+type seriesRepair struct {
+	lset labels.Labels
+	chks []chunks.Meta
 }
 
 // rewrite writes all data from the readers back into the writers while cleaning
@@ -605,17 +619,20 @@ func rewrite(
 		postings = index.NewMemPostings()
 		values   = map[string]stringset{}
 		i        = uint64(0)
+		series   = []seriesRepair{}
 	)
 
-	var lset labels.Labels
-	var chks []chunks.Meta
-
 	for all.Next() {
+		var lset labels.Labels
+		var chks []chunks.Meta
 		id := all.At()
 
 		if err := indexr.Series(id, &lset, &chks); err != nil {
 			return err
 		}
+		// Make sure labels are in sorted order.
+		sort.Sort(lset)
+
 		for i, c := range chks {
 			chks[i].Chunk, err = chunkr.Chunk(c.Ref)
 			if err != nil {
@@ -632,21 +649,39 @@ func rewrite(
 			continue
 		}
 
-		if err := chunkw.WriteChunks(chks...); err != nil {
+		series = append(series, seriesRepair{
+			lset: lset,
+			chks: chks,
+		})
+	}
+
+	if all.Err() != nil {
+		return errors.Wrap(all.Err(), "iterate series")
+	}
+
+	// Sort the series, if labels are re-ordered then the ordering of series
+	// will be different.
+	sort.Slice(series, func(i, j int) bool {
+		return labels.Compare(series[i].lset, series[j].lset) < 0
+	})
+
+	// Build a new TSDB block.
+	for _, s := range series {
+		if err := chunkw.WriteChunks(s.chks...); err != nil {
 			return errors.Wrap(err, "write chunks")
 		}
-		if err := indexw.AddSeries(i, lset, chks...); err != nil {
+		if err := indexw.AddSeries(i, s.lset, s.chks...); err != nil {
 			return errors.Wrap(err, "add series")
 		}
 
-		meta.Stats.NumChunks += uint64(len(chks))
+		meta.Stats.NumChunks += uint64(len(s.chks))
 		meta.Stats.NumSeries++
 
-		for _, chk := range chks {
+		for _, chk := range s.chks {
 			meta.Stats.NumSamples += uint64(chk.Chunk.NumSamples())
 		}
 
-		for _, l := range lset {
+		for _, l := range s.lset {
 			valset, ok := values[l.Name]
 			if !ok {
 				valset = stringset{}
@@ -654,11 +689,8 @@ func rewrite(
 			}
 			valset.set(l.Value)
 		}
-		postings.Add(i, lset)
+		postings.Add(i, s.lset)
 		i++
-	}
-	if all.Err() != nil {
-		return errors.Wrap(all.Err(), "iterate series")
 	}
 
 	s := make([]string, 0, 256)

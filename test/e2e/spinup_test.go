@@ -108,6 +108,7 @@ func scraper(i int, config string) cmdScheduleFunc {
 		cmds = append(cmds, newCmdExec(exec.Command(testutil.PrometheusBinary(),
 			"--config.file", promDir+"/prometheus.yml",
 			"--storage.tsdb.path", promDir,
+			"--storage.tsdb.max-block-duration", "2h",
 			"--log.level", "info",
 			"--web.listen-address", promHTTP(i),
 		)))
@@ -145,6 +146,7 @@ func receiver(i int, config string) cmdScheduleFunc {
 			"--grpc-address", remoteWriteReceiveGRPC(i),
 			"--http-address", remoteWriteReceiveMetricHTTP(i),
 			"--remote-write.address", remoteWriteReceiveHTTP(i),
+			"--labels", "receive=\"true\"",
 			"--tsdb.path", promDir,
 			"--log.level", "debug"))), nil
 	}

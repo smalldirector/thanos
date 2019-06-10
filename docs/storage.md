@@ -1,6 +1,13 @@
+---
+title: Object Storage
+type: docs
+menu: thanos
+slug: /storage.md
+---
+
 # Object Storage
 
-Thanos supports any object stores that can be implemented against Thanos [objstore.Bucket interface](/pkg/objstore/objstore.go)
+Thanos supports any object stores that can be implemented against Thanos [objstore.Bucket interface](https://github.com/improbable-eng/thanos/pkg/objstore/objstore.go)
 
 All clients are configured using `--objstore.config-file` to reference to the configuration file or `--objstore.config` to put yaml config directly.
 
@@ -21,12 +28,12 @@ NOTE: Currently Thanos requires strong consistency (write-read) for object store
 ## How to add a new client?
 
 1. Create new directory under `pkg/objstore/<provider>`
-2. Implement [objstore.Bucket interface](/pkg/objstore/objstore.go)
+2. Implement [objstore.Bucket interface](https://github.com/improbable-eng/thanos/pkg/objstore/objstore.go)
 3. Add `NewTestBucket` constructor for testing purposes, that creates and deletes temporary bucket.
-4. Use created `NewTestBucket` in [ForeachStore method](/pkg/objstore/objtesting/foreach.go) to ensure we can run tests against new provider. (In PR)
-5. RUN the [TestObjStoreAcceptanceTest](/pkg/objstore/objtesting/acceptance_e2e_test.go) against your provider to ensure it fits. Fix any found error until test passes. (In PR)
-6. Add client implementation to the factory in [factory](/pkg/objstore/client/factory.go) code. (Using as small amount of flags as possible in every command)
-7. Add client struct config to [bucketcfggen](/scripts/bucketcfggen/main.go) to allow config auto generation.
+4. Use created `NewTestBucket` in [ForeachStore method](https://github.com/improbable-eng/thanos/pkg/objstore/objtesting/foreach.go) to ensure we can run tests against new provider. (In PR)
+5. RUN the [TestObjStoreAcceptanceTest](https://github.com/improbable-eng/thanos/pkg/objstore/objtesting/acceptance_e2e_test.go) against your provider to ensure it fits. Fix any found error until test passes. (In PR)
+6. Add client implementation to the factory in [factory](https://github.com/improbable-eng/thanos/pkg/objstore/client/factory.go) code. (Using as small amount of flags as possible in every command)
+7. Add client struct config to [bucketcfggen](https://github.com/improbable-eng/thanos/scripts/bucketcfggen/main.go) to allow config auto generation.
 
 At that point, anyone can use your provider by spec
 
@@ -42,6 +49,7 @@ type: S3
 config:
   bucket: ""
   endpoint: ""
+  region: ""
   access_key: ""
   insecure: false
   signature_version2: false
@@ -55,7 +63,7 @@ config:
     enable: false
 ```
 
-AWS region to endpoint mapping can be found in this [link](https://docs.aws.amazon.com/general/latest/gr/rande.html#s3_region)
+The attribute `region` is optional. AWS region to endpoint mapping can be found in this [link](https://docs.aws.amazon.com/general/latest/gr/rande.html#s3_region).
 
 Make sure you use a correct signature version.
 Currently AWS require signature v4, so it needs `signature-version2: false`, otherwise, you will get Access Denied error, but several other S3 compatible use `signature-version2: true`
@@ -201,13 +209,27 @@ config:
 
 ### GCS Policies
 
+__Note:__ GCS Policies should be applied at the project level, not at the bucket level
+
 For deployment:
 
-`Storage Object Creator` and ` Storage Object Viewer`
+`Storage Object Creator` and `Storage Object Viewer`
 
 For testing:
 
 `Storage Object Admin` for ability to create and delete temporary buckets.
+
+To test the policy is working as expected, exec into the sidecar container, eg:
+
+```sh
+kubectl exec -it -n <namespace> <prometheus with sidecar pod name> -c <sidecar container name> -- /bin/sh
+```
+
+Then test that you can at least list objects in the bucket, eg:
+
+```sh
+thanos bucket ls --objstore.config="${OBJSTORE_CONFIG}"
+```
 
 ## Azure Configuration
 
@@ -224,6 +246,7 @@ config:
   storage_account: ""
   storage_account_key: ""
   container: ""
+  endpoint: ""
 ```
 
 ### OpenStack Swift Configuration
