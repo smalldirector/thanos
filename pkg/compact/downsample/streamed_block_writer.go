@@ -57,7 +57,6 @@ type streamedBlockWriter struct {
 
 	chunkWriter tsdb.ChunkWriter
 	indexWriter tsdb.IndexWriter
-	indexReader tsdb.IndexReader
 	closers     []io.Closer
 
 	labelsValues labelsValues       // labelsValues list of used label sets: name -> []values.
@@ -74,7 +73,7 @@ type streamedBlockWriter struct {
 // exception, not a general case.
 func NewStreamedBlockWriter(
 	blockDir string,
-	indexReader tsdb.IndexReader,
+	symbols map[string]struct{},
 	logger log.Logger,
 	originMeta metadata.Meta,
 ) (w *streamedBlockWriter, err error) {
@@ -104,11 +103,6 @@ func NewStreamedBlockWriter(
 	}
 	closers = append(closers, indexWriter)
 
-	symbols, err := indexReader.Symbols()
-	if err != nil {
-		return nil, errors.Wrap(err, "read symbols")
-	}
-
 	err = indexWriter.AddSymbols(symbols)
 	if err != nil {
 		return nil, errors.Wrap(err, "add symbols")
@@ -117,7 +111,6 @@ func NewStreamedBlockWriter(
 	return &streamedBlockWriter{
 		logger:       logger,
 		blockDir:     blockDir,
-		indexReader:  indexReader,
 		indexWriter:  indexWriter,
 		chunkWriter:  chunkWriter,
 		meta:         originMeta,
@@ -216,7 +209,7 @@ func (w *streamedBlockWriter) Close() error {
 	// No error, claim success.
 
 	level.Info(w.logger).Log(
-		"msg", "finalized downsampled block",
+		"msg", "write block",
 		"mint", w.meta.MinTime,
 		"maxt", w.meta.MaxTime,
 		"ulid", w.meta.ULID,
@@ -268,7 +261,7 @@ func (w *streamedBlockWriter) writeMemPostings() error {
 // writeMetaFile writes meta file.
 func (w *streamedBlockWriter) writeMetaFile() error {
 	w.meta.Version = metadata.MetaVersion1
-	w.meta.Thanos.Source = metadata.CompactorSource
+
 	w.meta.Stats.NumChunks = w.totalChunks
 	w.meta.Stats.NumSamples = w.totalSamples
 	w.meta.Stats.NumSeries = w.postings
