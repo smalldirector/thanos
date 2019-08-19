@@ -50,7 +50,7 @@ func TestNewReplicas(t *testing.T) {
 			if i == 0 {
 				continue
 			}
-			testutil.Assert(t, r.Blocks[i].MinTime > r.Blocks[i - 1].MinTime, "new replicas failed")
+			testutil.Assert(t, r.Blocks[i].MinTime > r.Blocks[i-1].MinTime, "new replicas failed")
 		}
 	}
 }
