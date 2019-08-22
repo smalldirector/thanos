@@ -384,12 +384,14 @@ func (rm *ReplicaMerger) getMergedChunkSeries(readers []*SampleReader, tw *TimeW
 		return nil, nil
 	}
 
+	samplesSet := make([]map[SampleType][]*Sample, 0)
+
 	lset := buf[0].lset
 	d0, err := buf[0].Read(tw)
 	if err != nil {
 		return nil, err
 	}
-	mergedData := d0
+	samplesSet = append(samplesSet, d0)
 	for i := 1; i < len(buf); i++ {
 		if buf[i] == nil {
 			break
@@ -404,10 +406,18 @@ func (rm *ReplicaMerger) getMergedChunkSeries(readers []*SampleReader, tw *TimeW
 		if len(di) == 0 {
 			continue
 		}
-		mergedData = rm.mergeSamples(mergedData, di, resolution)
+		samplesSet = append(samplesSet, di)
 	}
-
+	mergedData := rm.mergeSamplesSet(samplesSet, resolution)
 	return NewSampleSeries(lset, mergedData, resolution).ToChunkSeries()
+}
+
+func (rm *ReplicaMerger) mergeSamplesSet(samplesSet []map[SampleType][]*Sample, res int64) map[SampleType][]*Sample {
+	if len(samplesSet) == 1 {
+		return samplesSet[0]
+	}
+	mid := len(samplesSet) / 2
+	return rm.mergeSamples(rm.mergeSamplesSet(samplesSet[:mid], res), rm.mergeSamplesSet(samplesSet[mid:], res), res)
 }
 
 func (rm *ReplicaMerger) mergeSamples(a, b map[SampleType][]*Sample, res int64) map[SampleType][]*Sample {
