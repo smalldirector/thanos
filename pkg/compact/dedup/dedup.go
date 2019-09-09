@@ -9,6 +9,7 @@ import (
 	"github.com/go-kit/kit/log/level"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/thanos-io/thanos/pkg/compact"
 	"github.com/thanos-io/thanos/pkg/objstore"
 )
 
@@ -20,12 +21,12 @@ type BucketDeduper struct {
 
 	metrics *DedupMetrics
 
-	syncer *ReplicaSyncer
+	syncer *compact.MetaSyncer
 	merger *ReplicaMerger
 }
 
 func NewBucketDeduper(logger log.Logger, reg prometheus.Registerer, bkt objstore.Bucket, dedupDir, replicaLabelName string,
-	consistencyDelay time.Duration, blockSyncConcurrency int, blockSyncTimeout time.Duration) *BucketDeduper {
+	blockSyncTimeout time.Duration, syncer *compact.MetaSyncer) *BucketDeduper {
 	metrics := NewDedupMetrics(reg)
 	return &BucketDeduper{
 		logger:           logger,
@@ -33,7 +34,7 @@ func NewBucketDeduper(logger log.Logger, reg prometheus.Registerer, bkt objstore
 		replicaLabelName: replicaLabelName,
 		bkt:              bkt,
 		metrics:          metrics,
-		syncer:           NewReplicaSyncer(logger, metrics, bkt, replicaLabelName, consistencyDelay, blockSyncConcurrency, blockSyncTimeout),
+		syncer:           syncer,
 		merger:           NewReplicaMerger(logger, metrics, bkt, dedupDir, replicaLabelName, blockSyncTimeout),
 	}
 }
@@ -48,11 +49,14 @@ func (d *BucketDeduper) Dedup(ctx context.Context) error {
 		return errors.Wrap(err, "create the dedup temporary directory")
 	}
 
-	replicas, err := d.syncer.Sync(ctx)
+	metas, err := d.syncer.Sync(ctx)
 	if err != nil {
-		return errors.Wrap(err, "sync replica metas")
+		return errors.Wrap(err, "sync block metas")
 	}
-
+	replicas, err := NewReplicas(d.replicaLabelName, metas)
+	if err != nil {
+		return err
+	}
 	groups := make(map[string]Replicas)
 	for _, r := range replicas {
 		group := r.Group()

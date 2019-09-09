@@ -24,6 +24,7 @@ import (
 	"github.com/thanos-io/thanos/pkg/compact"
 	"github.com/thanos-io/thanos/pkg/compact/dedup"
 	"github.com/thanos-io/thanos/pkg/compact/downsample"
+	"github.com/thanos-io/thanos/pkg/compact/retention"
 	"github.com/thanos-io/thanos/pkg/component"
 	"github.com/thanos-io/thanos/pkg/objstore"
 	"github.com/thanos-io/thanos/pkg/objstore/client"
@@ -119,7 +120,10 @@ func registerCompact(m map[string]setupFunc, app *kingpin.Application) {
 	enableDedup := cmd.Flag("enable-dedup", "Enable dedup function, but effect depends on 'dedup.replica-label' config").Default("false").Bool()
 	dedupReplicaLabel := cmd.Flag("dedup.replica-label", "Label to treat as a replica indicator along which data is deduplicated.").String()
 
+	retentionPolicyConfig := regRetentionPolicyConfig(cmd)
+
 	m[component.Compact.String()] = func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ bool) error {
+
 		return runCompact(g, logger, reg,
 			*httpAddr,
 			*dataDir,
@@ -143,6 +147,7 @@ func registerCompact(m map[string]setupFunc, app *kingpin.Application) {
 			selectorRelabelConf,
 			*enableDedup,
 			*dedupReplicaLabel,
+			retentionPolicyConfig,
 		)
 	}
 }
@@ -169,6 +174,7 @@ func runCompact(
 	selectorRelabelConf *extflag.PathOrContent,
 	enableDedup bool,
 	dedupReplicaLabel string,
+	retentionPolicyConfig *pathOrContent,
 ) error {
 	halted := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "thanos_compactor_halted",
@@ -192,6 +198,10 @@ func runCompact(
 	}
 
 	confContentYaml, err := objStoreConfig.Content()
+	if err != nil {
+		return err
+	}
+	policyConfigYaml, err := retentionPolicyConfig.Content()
 	if err != nil {
 		return err
 	}
@@ -247,6 +257,7 @@ func runCompact(
 		compactDir      = path.Join(dataDir, "compact")
 		downsamplingDir = path.Join(dataDir, "downsample")
 		indexCacheDir   = path.Join(dataDir, "index_cache")
+		retentionDir    = filepath.Join(dataDir, "retention")
 	)
 
 	if err := os.RemoveAll(downsamplingDir); err != nil {
@@ -269,8 +280,8 @@ func runCompact(
 	if retentionByResolution[compact.ResolutionLevel1h].Seconds() != 0 {
 		level.Info(logger).Log("msg", "retention policy of 1 hour aggregated samples is enabled", "duration", retentionByResolution[compact.ResolutionLevel1h])
 	}
-
-	deduper := dedup.NewBucketDeduper(logger, reg, bkt, dedupDir, dedupReplicaLabel, consistencyDelay, blockSyncConcurrency, blockSyncTimeout)
+	syncer := compact.NewMetaSyncer(logger, reg, bkt, consistencyDelay, blockSyncConcurrency, blockSyncTimeout)
+	deduper := dedup.NewBucketDeduper(logger, reg, bkt, dedupDir, dedupReplicaLabel, blockSyncTimeout, syncer)
 
 	f := func() error {
 		if isEnableDedup(enableDedup, dedupReplicaLabel) {
@@ -304,9 +315,10 @@ func runCompact(
 			level.Warn(logger).Log("msg", "downsampling was explicitly disabled")
 		}
 
-		if err := compact.ApplyRetentionPolicyByResolution(ctx, logger, bkt, retentionByResolution); err != nil {
+		if err := retention.ApplyRetentionPolicy(ctx, logger, policyConfigYaml, reg, bkt, blockSyncTimeout, syncer, retentionDir); err != nil {
 			return errors.Wrap(err, fmt.Sprintf("retention failed"))
 		}
+
 		return nil
 	}
 

@@ -10,7 +10,6 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/oklog/ulid"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/prometheus/tsdb"
 	"github.com/prometheus/prometheus/tsdb/labels"
 	"github.com/thanos-io/thanos/pkg/block/metadata"
@@ -53,22 +52,6 @@ func TestNewReplicas(t *testing.T) {
 			testutil.Assert(t, r.Blocks[i].MinTime > r.Blocks[i-1].MinTime, "new replicas failed")
 		}
 	}
-}
-
-func TestReplicaSyncer_Sync(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-	logger := log.NewNopLogger()
-	reg := prometheus.NewRegistry()
-	bkt := mockObjectStoreBucket(t, ctx, logger)
-
-	syncer := NewReplicaSyncer(logger, NewDedupMetrics(reg), bkt, "replica", 0, 1, 0)
-
-	replicas, err := syncer.Sync(ctx)
-	testutil.Ok(t, err)
-	testutil.Assert(t, len(replicas) == 2, "replica syncer failed")
-	testutil.Assert(t, len(replicas[0].Blocks) == 1, "replica syncer failed")
-	testutil.Assert(t, len(replicas[1].Blocks) == 1, "replica syncer failed")
 }
 
 func mockObjectStoreBucket(t *testing.T, ctx context.Context, logger log.Logger) objstore.Bucket {

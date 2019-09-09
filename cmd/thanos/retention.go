@@ -3,28 +3,26 @@ package main
 import (
 	"context"
 	"github.com/thanos-io/thanos/pkg/compact"
+	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/go-kit/kit/log"
 	"github.com/oklog/run"
 	"github.com/opentracing/opentracing-go"
+	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/thanos-io/thanos/pkg/compact/dedup"
-	"github.com/thanos-io/thanos/pkg/extflag"
+	"github.com/thanos-io/thanos/pkg/compact/retention"
 	"github.com/thanos-io/thanos/pkg/objstore/client"
 	"github.com/thanos-io/thanos/pkg/runutil"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
 
-func registerDedup(m map[string]setupFunc, app *kingpin.Application, name string) {
+func registerRetention(m map[string]setupFunc, app *kingpin.Application, name string) {
 	cmd := app.Command(name, "continuously dedup blocks in an object store bucket")
 
 	dataDir := cmd.Flag("data-dir", "Data directory in which to cache blocks and process deduplication.").
 		Default("./data").String()
-
-	replicaLabel := cmd.Flag("dedup.replica-label", "Label to treat as a replica indicator along which data is deduplicated.").Required().
-		String()
 
 	consistencyDelay := modelDuration(cmd.Flag("consistency-delay", "Minimum age of fresh (non-dedup) blocks before they are being processed.").
 		Default("30m"))
@@ -36,13 +34,14 @@ func registerDedup(m map[string]setupFunc, app *kingpin.Application, name string
 
 	objStoreConfig := regCommonObjStoreFlags(cmd, "", true)
 
+	retentionPolicyConfig := regRetentionPolicyConfig(cmd)
+
 	m[name] = func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ bool) error {
-		return runDedup(g, logger, reg, *dataDir, *replicaLabel, time.Duration(*consistencyDelay), *blockSyncConcurrency, time.Duration(*blockSyncTimeout), objStoreConfig, name)
+		return runRetention(g, logger, reg, *dataDir, time.Duration(*consistencyDelay), *blockSyncConcurrency, time.Duration(*blockSyncTimeout), objStoreConfig, retentionPolicyConfig, name)
 	}
 }
 
-func runDedup(g *run.Group, logger log.Logger, reg *prometheus.Registry, dataDir string, replicaLabel string,
-	consistencyDelay time.Duration, blockSyncConcurrency int, blockSyncTimeout time.Duration, objStoreConfig *extflag.PathOrContent, component string) error {
+func runRetention(g *run.Group, logger log.Logger, reg *prometheus.Registry, dataDir string, consistencyDelay time.Duration, blockSyncConcurrency int, blockSyncTimeout time.Duration, objStoreConfig *pathOrContent, retentionPolicyConfig *pathOrContent, component string) error {
 	confContentYaml, err := objStoreConfig.Content()
 	if err != nil {
 		return err
@@ -56,16 +55,40 @@ func runDedup(g *run.Group, logger log.Logger, reg *prometheus.Registry, dataDir
 		return err
 	}
 
+	policyConfigYaml, err := retentionPolicyConfig.Content()
+	if err != nil {
+		return err
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
-	dedupDir := filepath.Join(dataDir, "dedup")
+	retentionDir := filepath.Join(dataDir, "retention")
+
+	if err := os.RemoveAll(retentionDir); err != nil {
+		cancel()
+		return errors.Wrap(err, "clean working downsample directory")
+	}
 	syncer := compact.NewMetaSyncer(logger, reg, bkt, consistencyDelay, blockSyncConcurrency, blockSyncTimeout)
 	g.Add(func() error {
 		defer runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
 
-		deduper := dedup.NewBucketDeduper(logger, reg, bkt, dedupDir, replicaLabel, blockSyncTimeout, syncer)
-		return deduper.Dedup(ctx)
+		return retention.ApplyRetentionPolicy(ctx, logger, policyConfigYaml, reg, bkt, blockSyncTimeout, syncer, retentionDir)
 	}, func(error) {
 		cancel()
 	})
 	return nil
+}
+
+func regRetentionPolicyConfig(cmd *kingpin.CmdClause) *pathOrContent {
+	fileFlagName := "retention.policy-file"
+	contentFlagName := "retention.policy"
+
+	policyConfFile := cmd.Flag(fileFlagName, "Path to YAML file that contains retention policy configuration.").PlaceHolder("<policy.config-yaml-path>").String()
+	policyConf := cmd.Flag(contentFlagName, "retention policy config.").PlaceHolder("<policy.config-yaml>").String()
+	return &pathOrContent{
+		fileFlagName:    fileFlagName,
+		contentFlagName: contentFlagName,
+		required:        true,
+		path:            policyConfFile,
+		content:         policyConf,
+	}
 }

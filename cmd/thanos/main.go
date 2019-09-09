@@ -83,6 +83,7 @@ func main() {
 	registerReceive(cmds, app)
 	registerChecks(cmds, app, "check")
 	registerDedup(cmds, app, "dedup")
+	registerRetention(cmds, app, "retention")
 
 	cmd, err := app.Parse(os.Args[1:])
 	if err != nil {

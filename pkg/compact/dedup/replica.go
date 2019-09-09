@@ -1,22 +1,13 @@
 package dedup
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
-	"github.com/go-kit/kit/log"
-	"github.com/go-kit/kit/log/level"
-	"github.com/oklog/ulid"
 	"github.com/pkg/errors"
-	"github.com/thanos-io/thanos/pkg/block"
 	"github.com/thanos-io/thanos/pkg/block/metadata"
-	"github.com/thanos-io/thanos/pkg/compact"
-	"github.com/thanos-io/thanos/pkg/objstore"
 )
 
 const (
@@ -134,133 +125,4 @@ func replicaGroup(labels map[string]string) string {
 	}
 	b.WriteString("]")
 	return b.String()
-}
-
-type ReplicaSyncer struct {
-	logger               log.Logger
-	metrics              *DedupMetrics
-	bkt                  objstore.Bucket
-	consistencyDelay     time.Duration
-	blockSyncConcurrency int
-	blockSyncTimeout     time.Duration
-
-	labelName string
-	mtx       sync.Mutex
-	blocksMtx sync.Mutex
-}
-
-func NewReplicaSyncer(logger log.Logger, metrics *DedupMetrics, bkt objstore.Bucket, labelName string,
-	consistencyDelay time.Duration, blockSyncConcurrency int, blockSyncTimeout time.Duration) *ReplicaSyncer {
-	return &ReplicaSyncer{
-		logger:               logger,
-		metrics:              metrics,
-		bkt:                  bkt,
-		labelName:            labelName,
-		consistencyDelay:     consistencyDelay,
-		blockSyncConcurrency: blockSyncConcurrency,
-		blockSyncTimeout:     blockSyncTimeout,
-	}
-}
-
-func (s *ReplicaSyncer) Sync(ctx context.Context) (Replicas, error) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-
-	var wg sync.WaitGroup
-	defer wg.Wait()
-
-	blocks := make(map[ulid.ULID]*metadata.Meta)
-	metaIdsChan := make(chan ulid.ULID)
-	errChan := make(chan error, s.blockSyncConcurrency)
-
-	var syncCtx context.Context
-	var cancel context.CancelFunc
-	if s.blockSyncTimeout.Seconds() > 0 {
-		syncCtx, cancel = context.WithTimeout(ctx, s.blockSyncTimeout)
-	} else {
-		syncCtx, cancel = context.WithCancel(ctx)
-	}
-	defer cancel()
-
-	for i := 0; i < s.blockSyncConcurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for id := range metaIdsChan {
-				s.blocksMtx.Lock()
-				_, seen := blocks[id]
-				s.blocksMtx.Unlock()
-				if seen {
-					continue
-				}
-				s.metrics.syncMetas.WithLabelValues(s.bkt.Name()).Inc()
-				begin := time.Now()
-				meta, err := s.download(syncCtx, id)
-				s.metrics.syncMetaDuration.WithLabelValues(s.bkt.Name()).Observe(time.Since(begin).Seconds())
-				if err != nil {
-					errChan <- err
-					s.metrics.syncMetaFailures.WithLabelValues(s.bkt.Name(), id.String()).Inc()
-					return
-				}
-				if meta == nil {
-					continue
-				}
-				s.blocksMtx.Lock()
-				blocks[id] = meta
-				s.blocksMtx.Unlock()
-			}
-		}()
-	}
-
-	remote := map[ulid.ULID]struct{}{}
-
-	err := s.bkt.Iter(ctx, "", func(name string) error {
-		id, ok := block.IsBlockDir(name)
-		if !ok {
-			return nil
-		}
-
-		remote[id] = struct{}{}
-
-		select {
-		case <-ctx.Done():
-		case metaIdsChan <- id:
-		}
-		return nil
-	})
-
-	close(metaIdsChan)
-
-	if err != nil {
-		return nil, compact.Retry(errors.Wrapf(err, "sync block metas from bucket %s", s.bkt.Name()))
-	}
-
-	wg.Wait()
-	close(errChan)
-
-	if err := <-errChan; err != nil {
-		return nil, compact.Retry(errors.Wrapf(err, "download block metas from bucket %s", s.bkt.Name()))
-	}
-
-	result := make([]*metadata.Meta, 0)
-	for id, b := range blocks {
-		if _, ok := remote[id]; ok {
-			result = append(result, b)
-		}
-	}
-	return NewReplicas(s.labelName, result)
-}
-
-func (s *ReplicaSyncer) download(ctx context.Context, id ulid.ULID) (*metadata.Meta, error) {
-	meta, err := block.DownloadMeta(ctx, s.logger, s.bkt, id)
-	if err != nil {
-		s.metrics.operateRemoteStorageFailures.WithLabelValues("get", s.bkt.Name(), id.String()).Inc()
-		return nil, compact.Retry(errors.Wrapf(err, "downloading block meta %s", id))
-	}
-	if ulid.Now()-id.Time() < uint64(s.consistencyDelay/time.Millisecond) {
-		level.Debug(s.logger).Log("msg", "block is too fresh for now", "consistency-delay", s.consistencyDelay, "block", id)
-		return nil, nil
-	}
-	level.Debug(s.logger).Log("msg", "downloaded block meta", "block", id)
-	return &meta, nil
 }

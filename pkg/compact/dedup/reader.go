@@ -443,6 +443,18 @@ func (r *BlockReader) Symbols() (map[string]struct{}, error) {
 	return r.ir.Symbols()
 }
 
+func (r *BlockReader) Postings() index.Postings {
+	return r.postings
+}
+
+func (r *BlockReader) IndexReader() tsdb.IndexReader {
+	return r.ir
+}
+
+func (r *BlockReader) ChunkReader() tsdb.ChunkReader {
+	return r.cr
+}
+
 func (r *BlockReader) Close() error {
 	var merr tsdberrors.MultiError
 	for i := len(r.closers) - 1; i >= 0; i-- {

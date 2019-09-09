@@ -3,14 +3,6 @@ package dedup
 import (
 	"context"
 	"fmt"
-	"github.com/prometheus/prometheus/tsdb"
-	"github.com/prometheus/prometheus/tsdb/chunkenc"
-	"github.com/prometheus/prometheus/tsdb/chunks"
-	"github.com/prometheus/prometheus/tsdb/index"
-	"github.com/prometheus/prometheus/tsdb/labels"
-	"github.com/thanos-io/thanos/pkg/block"
-	"github.com/thanos-io/thanos/pkg/objstore"
-	"github.com/thanos-io/thanos/pkg/testutil"
 	"io/ioutil"
 	"math/rand"
 	"os"
@@ -19,8 +11,16 @@ import (
 	"time"
 
 	"github.com/go-kit/kit/log"
-
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/prometheus/tsdb"
+	"github.com/prometheus/prometheus/tsdb/chunkenc"
+	"github.com/prometheus/prometheus/tsdb/chunks"
+	"github.com/prometheus/prometheus/tsdb/index"
+	"github.com/prometheus/prometheus/tsdb/labels"
+	"github.com/thanos-io/thanos/pkg/block"
+	"github.com/thanos-io/thanos/pkg/compact"
+	"github.com/thanos-io/thanos/pkg/objstore"
+	"github.com/thanos-io/thanos/pkg/testutil"
 )
 
 func TestBucketDeduper_Dedup(t *testing.T) {
@@ -68,8 +68,10 @@ func TestBucketDeduper_Dedup(t *testing.T) {
 }
 
 func getBucketReplicas(t *testing.T, ctx context.Context, logger log.Logger, bkt objstore.Bucket) Replicas {
-	syncer := NewReplicaSyncer(logger, NewDedupMetrics(prometheus.NewRegistry()), bkt, "replica", 0, 1, 0)
-	replicas, err := syncer.Sync(ctx)
+	syncer := compact.NewMetaSyncer(logger, prometheus.NewRegistry(), bkt, 0, 1, 0)
+	metas, err := syncer.Sync(ctx)
+	testutil.Ok(t, err)
+	replicas, err := NewReplicas("replica", metas)
 	testutil.Ok(t, err)
 	return replicas
 }
