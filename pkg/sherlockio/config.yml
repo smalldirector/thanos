@@ -1,0 +1,49 @@
+discoverytype: file
+operatorconfig: cmd/egress/config/operator.yml
+loglevels:
+  default: info
+  discovery: info
+  replica_state_manager: debug
+  health_reporter: info
+  querier: info
+healthstatsconfig:
+  statsCacheRefreshIntervalInSecs : 60
+  statsCacheGranularityInSecs : 60
+  statsCacheInvalidationInSecs: 600
+  healthStatsTimeout: 5
+  healthTimeout: 2
+  disableReplicaManager: false
+  ignoreHealthStats: false
+  enableLocalLoadBalance: true
+  preferLocalQuerying: true
+http:
+  secure: false
+  data:
+    address: :19090
+  grpc:
+    address: :19091
+  admin:
+    address: :19095
+  options:
+    replicaLabel: _replica_
+    queryTimeout: 5000
+    maxConcurrentQueries: 50
+    maxReadConcurrentQueries : 200
+    rejectLimit: 400
+    dnsInterval: 5000
+    enableAutoDownsample: true
+    hotTierDurationInHours: 96
+    longTermEnabled: true
+    longTermAvailabilityInHours: 24
+    maxIdleConns: 10
+tracer:
+  listener:
+    address: "127.0.0.1:50030"
+  tracing:
+    disabled: false
+    service_name: "egress"
+    sampler:
+      type: "probabilistic"
+    reporter:
+      agent_endpoint: "localhost:6831"
+      queue_size: 100

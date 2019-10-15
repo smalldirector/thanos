@@ -12,7 +12,7 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
+	"github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
 	"github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
 	"github.com/prometheus/prometheus/tsdb/labels"
@@ -23,6 +23,9 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.corp.ebay.com/sherlockio/egress-ebay/cmd/egress/thanos"
+	"github.corp.ebay.com/sherlockio/egress-ebay/cmd/util"
 )
 
 // Client holds meta information about a store.
@@ -49,6 +52,7 @@ type ProxyStore struct {
 	selectorLabels labels.Labels
 
 	responseTimeout time.Duration
+	matchers        func(r util.SeriesRequest, s map[string]thanos.Pair) ([]interface{}, error)
 }
 
 // NewProxyStore returns a new ProxyStore that uses the given clients that implements storeAPI to fan-in all series to the client.
@@ -59,6 +63,7 @@ func NewProxyStore(
 	component component.StoreAPI,
 	selectorLabels labels.Labels,
 	responseTimeout time.Duration,
+	matchers func(r util.SeriesRequest, s map[string]thanos.Pair) ([]interface{}, error),
 ) *ProxyStore {
 	if logger == nil {
 		logger = log.NewNopLogger()
@@ -70,6 +75,7 @@ func NewProxyStore(
 		component:       component,
 		selectorLabels:  selectorLabels,
 		responseTimeout: responseTimeout,
+		matchers:        matchers,
 	}
 	return s
 }
@@ -221,7 +227,31 @@ func (s *ProxyStore) Series(r *storepb.SeriesRequest, srv storepb.Store_SeriesSe
 			closeFn()
 		}()
 
-		for _, st := range s.stores() {
+		stores := s.stores()
+
+		//Sherlock.io integration point
+		span, gctx := tracing.StartSpan(gctx, "sherlockio_series")
+		defer span.Finish()
+		matched, err := getMatchedStores(gctx, stores, s.matchers, r, s.logger)
+		if err != nil {
+			level.Warn(s.logger).Log("err", err, "stores", strings.Join(storeDebugMsgs, ";"))
+			respSender.send(storepb.NewWarnSeriesResponse(err))
+			return nil
+		}
+		if len(matched) < 0 {
+			respSender.send(storepb.NewWarnSeriesResponse(errors.New("No matched stores")))
+			return nil
+		}
+
+		for index, m := range matched {
+
+			//Sherlock.io integration point
+			st := m.(Client)
+			if st == nil {
+				level.Error(s.logger).Log("stores", "store handle is nil")
+				continue
+			}
+			span.LogKV(fmt.Sprintf("store-(%d)", index), st.Addr())
 			// We might be able to skip the store if its meta information indicates
 			// it cannot have series matching our query.
 			// NOTE: all matchers are validated in matchesExternalLabels method so we explicitly ignore error.

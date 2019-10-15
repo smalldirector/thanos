@@ -118,6 +118,12 @@ assets: $(GOBINDATA)
 .PHONY: build
 build: check-git deps $(PROMU)
 	@echo ">> building binaries $(GOBIN)"
+	@GOOS=linux GOARCH=amd64 $(PROMU) build --prefix $(PREFIX)
+
+# build builds Thanos binary using `promu`.
+.PHONY: build_mac
+build_mac: check-git  go-mod-tidy $(PROMU)
+	@echo ">> building binaries $(GOBIN)"
 	@$(PROMU) build --prefix $(PREFIX)
 
 # crossbuild builds all binaries for all platforms.

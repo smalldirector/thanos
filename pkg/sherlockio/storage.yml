@@ -1,0 +1,14 @@
+clusters:
+- name: ms-nsn
+  isLongTerm: false
+  shards:
+  -
+    - storePort: 10702
+      dataPort: 7090
+      adminPort: 7091
+      hostName: 127.0.0.1
+  -
+    - storePort: 10802
+      dataPort: 8090
+      adminPort: 8091
+      hostName: 127.0.0.1

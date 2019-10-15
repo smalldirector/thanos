@@ -37,6 +37,8 @@ import (
 	"github.com/thanos-io/thanos/pkg/store"
 	"github.com/thanos-io/thanos/pkg/tracing"
 	"github.com/thanos-io/thanos/pkg/ui"
+	"github.corp.ebay.com/sherlockio/egress-ebay/cmd/egress/thanos"
+	"github.corp.ebay.com/sherlockio/prom-common-lib/qlfunctions"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
@@ -44,6 +46,7 @@ import (
 
 // registerQuery registers a query command.
 func registerQuery(m map[string]setupFunc, app *kingpin.Application) {
+	qlfunctions.RegisterExternalFunctions()
 	comp := component.Query
 	cmd := app.Command(comp.String(), "query node exposing PromQL enabled Query API with data retrieved from multiple store nodes")
 
@@ -280,6 +283,8 @@ func runQuery(
 	instantDefaultMaxSourceResolution time.Duration,
 	comp component.Component,
 ) error {
+	ebayEgress := thanos.Initialize(g)
+
 	// TODO(bplotka in PR #513 review): Move arguments into struct.
 	duplicatedStores := prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "thanos_query_duplicated_store_address",
@@ -316,7 +321,7 @@ func runQuery(
 			dialOpts,
 			unhealthyStoreTimeout,
 		)
-		proxy            = store.NewProxyStore(logger, stores.Get, component.Query, selectorLset, storeResponseTimeout)
+		proxy            = store.NewProxyStore(logger, stores.Get, component.Query, selectorLset, storeResponseTimeout, ebayEgress.Matchers)
 		queryableCreator = query.NewQueryableCreator(logger, proxy)
 		engine           = promql.NewEngine(
 			promql.EngineOpts{
@@ -382,7 +387,10 @@ func runQuery(
 		ctx, cancel := context.WithCancel(context.Background())
 		g.Add(func() error {
 			return runutil.Repeat(dnsSDInterval, ctx.Done(), func() error {
-				dnsProvider.Resolve(ctx, append(fileSDCache.Addresses(), storeAddrs...))
+				stores, _ := ebayEgress.Discovery.Stores()
+				stores = append(fileSDCache.Addresses(), stores...)
+				stores = append(stores, storeAddrs...)
+				dnsProvider.Resolve(ctx, stores)
 				return nil
 			})
 		}, func(error) {
@@ -413,7 +421,7 @@ func runQuery(
 
 		api := v1.NewAPI(logger, reg, engine, queryableCreator, enableAutodownsampling, enablePartialResponse, replicaLabels, instantDefaultMaxSourceResolution)
 
-		api.Register(router.WithPrefix(path.Join(webRoutePrefix, "/api/v1")), tracer, logger, ins)
+		api.Register(router.WithPrefix(path.Join(webRoutePrefix, "/api/v1")), tracer, logger, ins, ebayEgress)
 
 		// Initiate HTTP listener providing metrics endpoint and readiness/liveness probes.
 		if err := scheduleHTTPServer(g, logger, reg, statusProber, httpBindAddr, router, comp); err != nil {

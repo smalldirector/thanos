@@ -25,7 +25,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/NYTimes/gziphandler"
 	"github.com/go-kit/kit/log"
 	"github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
@@ -40,6 +39,8 @@ import (
 	"github.com/thanos-io/thanos/pkg/query"
 	"github.com/thanos-io/thanos/pkg/runutil"
 	"github.com/thanos-io/thanos/pkg/tracing"
+
+	"github.corp.ebay.com/sherlockio/egress-ebay/cmd/egress/thanos"
 )
 
 type status string
@@ -135,20 +136,10 @@ func NewAPI(
 }
 
 // Register the API's endpoints in the given router.
-func (api *API) Register(r *route.Router, tracer opentracing.Tracer, logger log.Logger, ins extpromhttp.InstrumentationMiddleware) {
-	instr := func(name string, f ApiFunc) http.HandlerFunc {
-		hf := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			SetCORS(w)
-			if data, warnings, err := f(r); err != nil {
-				RespondError(w, err, data)
-			} else if data != nil {
-				Respond(w, data, warnings)
-			} else {
-				w.WriteHeader(http.StatusNoContent)
-			}
-		})
-		return ins.NewHandler(name, tracing.HTTPMiddleware(tracer, name, logger, gziphandler.GzipHandler(hf)))
-	}
+func (api *API) Register(r *route.Router, tracer opentracing.Tracer, logger log.Logger, ins extpromhttp.InstrumentationMiddleware, s *thanos.EgressV1) {
+	metrics := newMetrics()
+	instr := Default(ins, s, tracer, metrics)
+	over := Overload(ins, s, tracer, metrics)
 
 	r.Options("/*path", instr("options", api.options))
 
@@ -164,6 +155,7 @@ func (api *API) Register(r *route.Router, tracer opentracing.Tracer, logger log.
 	r.Post("/series", instr("series", api.series))
 
 	r.Get("/labels", instr("label_names", api.labelNames))
+	r.Post("/read", over("read", api.series)) // Sherlockio Remote read
 }
 
 type queryData struct {
@@ -293,7 +285,7 @@ func (api *API) query(r *http.Request) (interface{}, []error, *ApiError) {
 	span, ctx := tracing.StartSpan(ctx, "promql_instant_query")
 	defer span.Finish()
 
-	qry, err := api.queryEngine.NewInstantQuery(api.queryableCreate(enableDedup, replicaLabels, maxSourceResolution, enablePartialResponse), r.FormValue("query"), ts)
+	qry, err := api.queryEngine.NewInstantQuery(api.queryableCreate(enableDedup, replicaLabels, maxSourceResolution, enablePartialResponse), r.FormValue("query"), ts, true)
 	if err != nil {
 		return nil, nil, &ApiError{errorBadData, err}
 	}
@@ -391,6 +383,7 @@ func (api *API) queryRange(r *http.Request) (interface{}, []error, *ApiError) {
 		start,
 		end,
 		step,
+		true,
 	)
 	if err != nil {
 		return nil, nil, &ApiError{errorBadData, err}
@@ -547,7 +540,7 @@ func Respond(w http.ResponseWriter, data interface{}, warnings []error) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func RespondError(w http.ResponseWriter, apiErr *ApiError, data interface{}) {
+func RespondError(w http.ResponseWriter, apiErr *ApiError, data interface{}) int {
 	w.Header().Set("Content-Type", "application/json")
 
 	var code int
@@ -571,6 +564,8 @@ func RespondError(w http.ResponseWriter, apiErr *ApiError, data interface{}) {
 		Error:     apiErr.Err.Error(),
 		Data:      data,
 	})
+
+	return code
 }
 
 func parseTime(s string) (time.Time, error) {

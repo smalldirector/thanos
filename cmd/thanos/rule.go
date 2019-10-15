@@ -752,7 +752,7 @@ func queryFunc(
 		panic(errors.Errorf("unknown partial response strategy %v", partialResponseStrategy).Error())
 	}
 
-	return func(ctx context.Context, q string, t time.Time) (promql.Vector, error) {
+	return func(ctx context.Context, q string, t time.Time, useCache bool) (promql.Vector, error) {
 		// Add DNS resolved addresses from static flags and file SD.
 		// TODO(bwplotka): Consider generating addresses in *url.URL.
 		addrs := dnsProvider.Addresses()
