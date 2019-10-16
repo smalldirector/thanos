@@ -396,7 +396,7 @@ func (bk *blockKeeper) upload(ctx context.Context, id *ulid.ULID) error {
 }
 
 func (bk *blockKeeper) cleanRemote(ctx context.Context, id ulid.ULID) error {
-	if err := DeleteRemoteBlock(ctx, bk.timeout, bk.bkt, id); err != nil {
+	if err := DeleteRemoteBlock(ctx, bk.logger, bk.timeout, bk.bkt, id); err != nil {
 		return compact.Retry(err)
 	}
 	level.Debug(bk.logger).Log("msg", "deleted remote block", "block", id)
@@ -457,10 +457,10 @@ func DeleteLocalBlock(dir string, id ulid.ULID) error {
 	return nil
 }
 
-func DeleteRemoteBlock(ctx context.Context, timeout time.Duration, bkt objstore.Bucket, id ulid.ULID) error {
+func DeleteRemoteBlock(ctx context.Context, logger log.Logger, timeout time.Duration, bkt objstore.Bucket, id ulid.ULID) error {
 	workCtx, cancel := TimeoutContext(ctx, timeout)
 	defer cancel()
-	if err := block.Delete(workCtx, bkt, id); err != nil {
+	if err := block.Delete(workCtx, logger, bkt, id); err != nil {
 		return errors.Wrapf(err, "delete remote block %s", id)
 	}
 	return nil

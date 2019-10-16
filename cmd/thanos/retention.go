@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"github.com/thanos-io/thanos/pkg/compact"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -12,7 +12,9 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/thanos-io/thanos/pkg/compact"
 	"github.com/thanos-io/thanos/pkg/compact/retention"
+	"github.com/thanos-io/thanos/pkg/extflag"
 	"github.com/thanos-io/thanos/pkg/objstore/client"
 	"github.com/thanos-io/thanos/pkg/runutil"
 	"gopkg.in/alecthomas/kingpin.v2"
@@ -41,7 +43,7 @@ func registerRetention(m map[string]setupFunc, app *kingpin.Application, name st
 	}
 }
 
-func runRetention(g *run.Group, logger log.Logger, reg *prometheus.Registry, dataDir string, consistencyDelay time.Duration, blockSyncConcurrency int, blockSyncTimeout time.Duration, objStoreConfig *pathOrContent, retentionPolicyConfig *pathOrContent, component string) error {
+func runRetention(g *run.Group, logger log.Logger, reg *prometheus.Registry, dataDir string, consistencyDelay time.Duration, blockSyncConcurrency int, blockSyncTimeout time.Duration, objStoreConfig *extflag.PathOrContent, retentionPolicyConfig *extflag.PathOrContent, component string) error {
 	confContentYaml, err := objStoreConfig.Content()
 	if err != nil {
 		return err
@@ -78,17 +80,7 @@ func runRetention(g *run.Group, logger log.Logger, reg *prometheus.Registry, dat
 	return nil
 }
 
-func regRetentionPolicyConfig(cmd *kingpin.CmdClause) *pathOrContent {
-	fileFlagName := "retention.policy-file"
-	contentFlagName := "retention.policy"
-
-	policyConfFile := cmd.Flag(fileFlagName, "Path to YAML file that contains retention policy configuration.").PlaceHolder("<policy.config-yaml-path>").String()
-	policyConf := cmd.Flag(contentFlagName, "retention policy config.").PlaceHolder("<policy.config-yaml>").String()
-	return &pathOrContent{
-		fileFlagName:    fileFlagName,
-		contentFlagName: contentFlagName,
-		required:        true,
-		path:            policyConfFile,
-		content:         policyConf,
-	}
+func regRetentionPolicyConfig(cmd *kingpin.CmdClause) *extflag.PathOrContent {
+	help := fmt.Sprintf("YAML file that contains policy configuration <policy.config-yaml>.")
+	return extflag.RegisterPathOrContent(cmd, fmt.Sprintf("retention.policy"), help, true)
 }

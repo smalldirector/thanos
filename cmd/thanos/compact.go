@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thanos-io/thanos/pkg/extflag"
-
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/oklog/run"
@@ -26,6 +24,7 @@ import (
 	"github.com/thanos-io/thanos/pkg/compact/downsample"
 	"github.com/thanos-io/thanos/pkg/compact/retention"
 	"github.com/thanos-io/thanos/pkg/component"
+	"github.com/thanos-io/thanos/pkg/extflag"
 	"github.com/thanos-io/thanos/pkg/objstore"
 	"github.com/thanos-io/thanos/pkg/objstore/client"
 	"github.com/thanos-io/thanos/pkg/prober"
@@ -174,7 +173,7 @@ func runCompact(
 	selectorRelabelConf *extflag.PathOrContent,
 	enableDedup bool,
 	dedupReplicaLabel string,
-	retentionPolicyConfig *pathOrContent,
+	retentionPolicyConfig *extflag.PathOrContent,
 ) error {
 	halted := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "thanos_compactor_halted",
