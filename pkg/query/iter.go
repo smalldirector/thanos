@@ -431,7 +431,7 @@ func (s *dedupSeries) Labels() labels.Labels {
 func (s *dedupSeries) Iterator() (it storage.SeriesIterator) {
 	it = s.replicas[0].Iterator()
 	for _, o := range s.replicas[1:] {
-		it = newDedupSeriesIterator(it, o.Iterator())
+		it = NewDedupSeriesIterator(it, o.Iterator())
 	}
 	return it
 }
@@ -445,7 +445,7 @@ type dedupSeriesIterator struct {
 	useA       bool
 }
 
-func newDedupSeriesIterator(a, b storage.SeriesIterator) *dedupSeriesIterator {
+func NewDedupSeriesIterator(a, b storage.SeriesIterator) *dedupSeriesIterator {
 	return &dedupSeriesIterator{
 		a:     a,
 		b:     b,
@@ -486,6 +486,14 @@ func (it *dedupSeriesIterator) Next() bool {
 	tb, _ := it.b.At()
 
 	it.useA = ta <= tb
+
+	// If they met at same timestamp, no need to add penalty for next seek.
+	if ta == tb {
+		it.penA = 0
+		it.penB = 0
+		it.lastT = ta
+		return true
+	}
 
 	// For the series we didn't pick, add a penalty twice as high as the delta of the last two
 	// samples to the next seek against it.

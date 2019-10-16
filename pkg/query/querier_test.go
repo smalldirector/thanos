@@ -582,10 +582,10 @@ func TestDedupSeriesIterator(t *testing.T) {
 			b:   []sample{{10000, 2}, {20000, 2}, {30000, 2}, {40000, 2}},
 			exp: []sample{{10000, 2}, {20000, 2}, {30000, 2}, {40000, 2}},
 		},
-		{ // Don't switch series on a single delta sized gap.
+		{
 			a:   []sample{{10000, 1}, {20000, 1}, {40000, 1}},
 			b:   []sample{{10000, 2}, {20000, 2}, {30000, 2}, {40000, 2}},
-			exp: []sample{{10000, 1}, {20000, 1}, {40000, 1}},
+			exp: []sample{{10000, 1}, {20000, 1}, {30000, 2}, {40000, 2}},
 		},
 		{
 			a:   []sample{{10000, 1}, {20000, 1}, {40000, 1}},
@@ -600,7 +600,7 @@ func TestDedupSeriesIterator(t *testing.T) {
 	}
 	for i, c := range cases {
 		t.Logf("case %d:", i)
-		it := newDedupSeriesIterator(
+		it := NewDedupSeriesIterator(
 			&SampleIterator{l: c.a, i: -1},
 			&SampleIterator{l: c.b, i: -1},
 		)
@@ -611,7 +611,7 @@ func TestDedupSeriesIterator(t *testing.T) {
 
 func BenchmarkDedupSeriesIterator(b *testing.B) {
 	run := func(b *testing.B, s1, s2 []sample) {
-		it := newDedupSeriesIterator(
+		it := NewDedupSeriesIterator(
 			&SampleIterator{l: s1, i: -1},
 			&SampleIterator{l: s2, i: -1},
 		)

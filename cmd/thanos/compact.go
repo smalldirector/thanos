@@ -22,6 +22,7 @@ import (
 	"github.com/thanos-io/thanos/pkg/block"
 	"github.com/thanos-io/thanos/pkg/block/metadata"
 	"github.com/thanos-io/thanos/pkg/compact"
+	"github.com/thanos-io/thanos/pkg/compact/dedup"
 	"github.com/thanos-io/thanos/pkg/compact/downsample"
 	"github.com/thanos-io/thanos/pkg/component"
 	"github.com/thanos-io/thanos/pkg/objstore"
@@ -108,10 +109,15 @@ func registerCompact(m map[string]setupFunc, app *kingpin.Application) {
 	blockSyncConcurrency := cmd.Flag("block-sync-concurrency", "Number of goroutines to use when syncing block metadata from object storage.").
 		Default("20").Int()
 
+	blockSyncTimeout := modelDuration(cmd.Flag("block-sync-timeout", "Timeout duration when syncing block from object storage. 0s - disables this timeout").Default("0s"))
+
 	compactionConcurrency := cmd.Flag("compact.concurrency", "Number of goroutines to use when compacting groups.").
 		Default("1").Int()
 
 	selectorRelabelConf := regSelectorRelabelFlags(cmd)
+
+	enableDedup := cmd.Flag("enable-dedup", "Enable dedup function, but effect depends on 'dedup.replica-label' config").Default("false").Bool()
+	dedupReplicaLabel := cmd.Flag("dedup.replica-label", "Label to treat as a replica indicator along which data is deduplicated.").String()
 
 	m[component.Compact.String()] = func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ bool) error {
 		return runCompact(g, logger, reg,
@@ -132,8 +138,11 @@ func registerCompact(m map[string]setupFunc, app *kingpin.Application) {
 			*disableDownsampling,
 			*maxCompactionLevel,
 			*blockSyncConcurrency,
+			time.Duration(*blockSyncTimeout),
 			*compactionConcurrency,
 			selectorRelabelConf,
+			*enableDedup,
+			*dedupReplicaLabel,
 		)
 	}
 }
@@ -155,8 +164,11 @@ func runCompact(
 	disableDownsampling bool,
 	maxCompactionLevel int,
 	blockSyncConcurrency int,
+	blockSyncTimeout time.Duration,
 	concurrency int,
 	selectorRelabelConf *extflag.PathOrContent,
+	enableDedup bool,
+	dedupReplicaLabel string,
 ) error {
 	halted := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "thanos_compactor_halted",
@@ -207,7 +219,7 @@ func runCompact(
 	}()
 
 	sy, err := compact.NewSyncer(logger, reg, bkt, consistencyDelay,
-		blockSyncConcurrency, acceptMalformedIndex, relabelConfig)
+		blockSyncConcurrency, blockSyncTimeout, acceptMalformedIndex, relabelConfig)
 	if err != nil {
 		return errors.Wrap(err, "create syncer")
 	}
@@ -231,6 +243,7 @@ func runCompact(
 	}
 
 	var (
+		dedupDir        = path.Join(dataDir, "dedup")
 		compactDir      = path.Join(dataDir, "compact")
 		downsamplingDir = path.Join(dataDir, "downsample")
 		indexCacheDir   = path.Join(dataDir, "index_cache")
@@ -257,7 +270,14 @@ func runCompact(
 		level.Info(logger).Log("msg", "retention policy of 1 hour aggregated samples is enabled", "duration", retentionByResolution[compact.ResolutionLevel1h])
 	}
 
+	deduper := dedup.NewBucketDeduper(logger, reg, bkt, dedupDir, dedupReplicaLabel, consistencyDelay, blockSyncConcurrency, blockSyncTimeout)
+
 	f := func() error {
+		if isEnableDedup(enableDedup, dedupReplicaLabel) {
+			if err := deduper.Dedup(ctx); err != nil {
+				return errors.Wrap(err, "dedup failed")
+			}
+		}
 		if err := compactor.Compact(ctx); err != nil {
 			return errors.Wrap(err, "compaction failed")
 		}
@@ -462,4 +482,8 @@ func generateIndexCacheFile(
 		return errors.Wrap(err, "upload index cache")
 	}
 	return nil
+}
+
+func isEnableDedup(enableDedup bool, dedupReplicaLabel string) bool {
+	return enableDedup && len(dedupReplicaLabel) > 0
 }

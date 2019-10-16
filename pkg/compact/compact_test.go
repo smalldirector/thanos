@@ -41,7 +41,7 @@ func TestHaltMultiError(t *testing.T) {
 }
 
 func TestRetryMultiError(t *testing.T) {
-	retryErr := retry(errors.New("retry error"))
+	retryErr := Retry(errors.New("retry error"))
 	nonRetryErr := errors.New("not a retry error")
 
 	errs := terrors.MultiError{nonRetryErr}
@@ -58,16 +58,16 @@ func TestRetryError(t *testing.T) {
 	err := errors.New("test")
 	testutil.Assert(t, !IsRetryError(err), "retry error")
 
-	err = retry(errors.New("test"))
+	err = Retry(errors.New("test"))
 	testutil.Assert(t, IsRetryError(err), "not a retry error")
 
-	err = errors.Wrap(retry(errors.New("test")), "something")
+	err = errors.Wrap(Retry(errors.New("test")), "something")
 	testutil.Assert(t, IsRetryError(err), "not a retry error")
 
-	err = errors.Wrap(errors.Wrap(retry(errors.New("test")), "something"), "something2")
+	err = errors.Wrap(errors.Wrap(Retry(errors.New("test")), "something"), "something2")
 	testutil.Assert(t, IsRetryError(err), "not a retry error")
 
-	err = errors.Wrap(retry(errors.Wrap(halt(errors.New("test")), "something")), "something2")
+	err = errors.Wrap(Retry(errors.Wrap(halt(errors.New("test")), "something")), "something2")
 	testutil.Assert(t, IsHaltError(err), "not a halt error. Retry should not hide halt error")
 }
 
@@ -77,7 +77,7 @@ func TestSyncer_SyncMetas_HandlesMalformedBlocks(t *testing.T) {
 
 	bkt := inmem.NewBucket()
 	relabelConfig := make([]*relabel.Config, 0)
-	sy, err := NewSyncer(nil, nil, bkt, 10*time.Second, 1, false, relabelConfig)
+	sy, err := NewSyncer(nil, nil, bkt, 10*time.Second, 1, 0, false, relabelConfig)
 	testutil.Ok(t, err)
 
 	// Generate 1 block which is older than MinimumAgeForRemoval which has chunk data but no meta.  Compactor should delete it.
