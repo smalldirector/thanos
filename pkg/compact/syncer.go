@@ -15,6 +15,7 @@ import (
 	"github.com/thanos-io/thanos/pkg/objstore"
 )
 
+// MetaSyncer fetches all the blocks' metadata information for given bucket
 type MetaSyncer struct {
 	logger               log.Logger
 	bkt                  objstore.Bucket
@@ -57,6 +58,7 @@ func newMetaSyncerMetrics(reg prometheus.Registerer) *metaSyncerMetrics {
 	return &m
 }
 
+// NewMetaSyncer return a new MetaSyncer with given bucket information
 func NewMetaSyncer(logger log.Logger, reg prometheus.Registerer, bkt objstore.Bucket, consistencyDelay time.Duration,
 	blockSyncConcurrency int, blockSyncTimeout time.Duration) *MetaSyncer {
 	return &MetaSyncer{

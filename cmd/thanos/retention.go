@@ -59,6 +59,7 @@ func runRetention(g *run.Group, logger log.Logger, reg *prometheus.Registry, dat
 
 	policyConfigYaml, err := retentionPolicyConfig.Content()
 	if err != nil {
+		runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
 		return err
 	}
 

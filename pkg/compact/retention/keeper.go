@@ -37,59 +37,38 @@ func (e *seriesEvaluator) Evaluate(lset labels.Labels, pg *policyGroup) (bool, e
 		return true, nil
 	}
 	m := lset.Map()
-	if pg.isDefaultPolicyActive {
-		// if default policy is active, check whether there is matched inactive policy or not
-		// if find matched inactive policy, do not purge the series at this time. If not, purge it in this round.
-		for _, p := range pg.inactive {
-			matched, err := e.isMatched(p.lset.Map(), m)
-			if err != nil {
-				return false, err
-			}
-			if matched {
-				return false, nil
-			}
+	// if find matched inactive policy, do not purge the series at this round.
+	for _, p := range pg.inactive {
+		matched, err := e.isMatched(p.lset.Map(), m)
+		if err != nil {
+			return false, err
 		}
+		if matched {
+			return false, nil
+		}
+	}
+	// if default policy is active, purge the series at this round
+	if pg.isDefaultPolicyActive {
 		return true, nil
 	}
-	// three steps to detect the series should be purged or not when default policy is not active
-	// step 1: check whether there is any matched active policy
-	// step 2: if find matched active policy, check whether there is any matched inactive policy
-	// step 3: if find matched inactive policy, do not purge the series at this time. If not, purge it in this round.
-	foundMatchedActivePolicy := false
+	// if find matched active policy, purge the series at this round
 	for _, p := range pg.active {
 		matched, err := e.isMatched(p.lset.Map(), m)
 		if err != nil {
 			return false, err
 		}
 		if matched {
-			foundMatchedActivePolicy = true
-			break
+			return true, nil
 		}
 	}
-	if !foundMatchedActivePolicy {
-		return false, nil
-	}
-	foundMatchedInActivePolicy := false
-	for _, p := range pg.inactive {
-		// don't compare the regular policy with default policy
-		// otherwise it means we have no way set retention time shorter than the one defined in default policy
-		if p.isDefaultPolicy() {
-			continue
-		}
-		matched, err := e.isMatched(p.lset.Map(), m)
-		if err != nil {
-			return false, err
-		}
-		if matched {
-			foundMatchedInActivePolicy = true
-			break
-		}
-	}
-	return !foundMatchedInActivePolicy, nil
+	return false, nil
 }
 
 // compare lset from policy and series
 func (e *seriesEvaluator) isMatched(plset map[string]string, slset map[string]string) (bool, error) {
+	if len(plset) == 0 {
+		return false, nil
+	}
 	matched := true
 	for k, v := range plset {
 		if _, ok := slset[k]; !ok {

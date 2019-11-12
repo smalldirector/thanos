@@ -196,7 +196,7 @@ func (pc *PolicyConfigs) ToPolicies() (map[resType][]*policy, error) {
 	res[res1h] = make([]*policy, 0)
 
 	// use "" or "{}" to indicate default policy
-	foundDefaultPolocy := false
+	foundDefaultPolicy := false
 	for _, config := range pc.Configs {
 		var lset labels.Labels
 		var err error
@@ -209,7 +209,7 @@ func (pc *PolicyConfigs) ToPolicies() (map[resType][]*policy, error) {
 			lset = make(labels.Labels, 0)
 		}
 		if len(lset) == 0 {
-			foundDefaultPolocy = true
+			foundDefaultPolicy = true
 		}
 		if config.Retentions.ResRaw > 0 {
 			res[resRaw] = append(res[resRaw], NewPolicy(lset, time.Duration(config.Retentions.ResRaw)))
@@ -227,7 +227,7 @@ func (pc *PolicyConfigs) ToPolicies() (map[resType][]*policy, error) {
 			res[res1h] = append(res[res1h], NewPolicy(lset, maxDuration))
 		}
 	}
-	if !foundDefaultPolocy {
+	if !foundDefaultPolicy {
 		lset := make(labels.Labels, 0)
 		res[resRaw] = append(res[resRaw], NewPolicy(lset, maxDuration))
 		res[res5m] = append(res[res5m], NewPolicy(lset, maxDuration))

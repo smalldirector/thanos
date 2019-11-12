@@ -122,7 +122,6 @@ func registerCompact(m map[string]setupFunc, app *kingpin.Application) {
 	retentionPolicyConfig := regRetentionPolicyConfig(cmd)
 
 	m[component.Compact.String()] = func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ bool) error {
-
 		return runCompact(g, logger, reg,
 			*httpAddr,
 			*dataDir,
